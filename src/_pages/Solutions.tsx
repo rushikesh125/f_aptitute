@@ -1,1133 +1,572 @@
-// ProcessingHelper.ts
-import fs from "node:fs"
-import path from "node:path"
-import { ScreenshotHelper } from "./ScreenshotHelper"
-import { IProcessingHelperDeps } from "./main"
-import * as axios from "axios"
-import { app, BrowserWindow, dialog } from "electron"
-import { OpenAI } from "openai"
-import { configHelper } from "./ConfigHelper"
-import Anthropic from '@anthropic-ai/sdk';
+// Solutions.tsx
+import React, { useState, useEffect, useRef } from "react"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { Prism as SyntaxHighlighter } from "react-syntax-highlighter"
+import { dracula } from "react-syntax-highlighter/dist/esm/styles/prism"
 
-// Interface for Gemini API requests
-interface GeminiMessage {
-  role: string;
-  parts: Array<{
-    text?: string;
-    inlineData?: {
-      mimeType: string;
-      data: string;
+import ScreenshotQueue from "../components/Queue/ScreenshotQueue"
+
+import { ProblemStatementData } from "../types/solutions"
+import SolutionCommands from "../components/Solutions/SolutionCommands"
+import Debug from "./Debug"
+import { useToast } from "../contexts/toast"
+import { COMMAND_KEY } from "../utils/platform"
+
+export const ContentSection = ({
+  title,
+  content,
+  isLoading
+}: {
+  title: string
+  content: React.ReactNode
+  isLoading: boolean
+}) => (
+  <div className="space-y-2">
+    <h2 className="text-[13px] font-medium text-white tracking-wide">
+      {title}
+    </h2>
+    {isLoading ? (
+      <div className="mt-4 flex">
+        <p className="text-xs bg-gradient-to-r from-gray-300 via-gray-100 to-gray-300 bg-clip-text text-transparent animate-pulse">
+          Extracting problem statement...
+        </p>
+      </div>
+    ) : (
+      <div className="text-[13px] leading-[1.4] text-gray-100 max-w-[600px]">
+        {content}
+      </div>
+    )}
+  </div>
+)
+const SolutionSection = ({
+  title,
+  content,
+  isLoading,
+  currentLanguage
+}: {
+  title: string
+  content: React.ReactNode
+  isLoading: boolean
+  currentLanguage: string
+}) => {
+  const [copied, setCopied] = useState(false)
+
+  const copyToClipboard = () => {
+    if (typeof content === "string") {
+      navigator.clipboard.writeText(content).then(() => {
+        setCopied(true)
+        setTimeout(() => setCopied(false), 2000)
+      })
     }
-  }>;
+  }
+
+  return (
+    <div className="space-y-2 relative">
+      <h2 className="text-[13px] font-medium text-white tracking-wide">
+        {title}
+      </h2>
+      {isLoading ? (
+        <div className="space-y-1.5">
+          <div className="mt-4 flex">
+            <p className="text-xs bg-gradient-to-r from-gray-300 via-gray-100 to-gray-300 bg-clip-text text-transparent animate-pulse">
+              Loading solutions...
+            </p>
+          </div>
+        </div>
+      ) : (
+        <div className="w-full relative">
+          <button
+            onClick={copyToClipboard}
+            className="absolute top-2 right-2 text-xs text-white bg-white/10 hover:bg-white/20 rounded px-2 py-1 transition"
+          >
+            {copied ? "Copied!" : "Copy"}
+          </button>
+          <SyntaxHighlighter
+            showLineNumbers
+            language={currentLanguage == "golang" ? "go" : currentLanguage}
+            style={dracula}
+            customStyle={{
+              maxWidth: "100%",
+              margin: 0,
+              padding: "1rem",
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-all",
+              backgroundColor: "rgba(22, 27, 34, 0.5)"
+            }}
+            wrapLongLines={true}
+          >
+            {content as string}
+          </SyntaxHighlighter>
+        </div>
+      )}
+    </div>
+  )
 }
-interface GeminiResponse {
-  candidates: Array<{
-    content: {
-      parts: Array<{
-        text: string;
-      }>;
-    };
-    finishReason: string;
-  }>;
+
+export const ComplexitySection = ({
+  timeComplexity,
+  spaceComplexity,
+  isLoading
+}: {
+  timeComplexity: string | null
+  spaceComplexity: string | null
+  isLoading: boolean
+}) => {
+  // Helper to ensure we have proper complexity values
+  const formatComplexity = (complexity: string | null): string => {
+    // Default if no complexity returned by LLM
+    if (!complexity || complexity.trim() === "") {
+      return "Complexity not available";
+    }
+
+    const bigORegex = /O\([^)]+\)/i;
+    // Return the complexity as is if it already has Big O notation
+    if (bigORegex.test(complexity)) {
+      return complexity;
+    }
+    
+    // Concat Big O notation to the complexity
+    return `O(${complexity})`;
+  };
+  
+  const formattedTimeComplexity = formatComplexity(timeComplexity);
+  const formattedSpaceComplexity = formatComplexity(spaceComplexity);
+  
+  return (
+    <div className="space-y-2">
+      <h2 className="text-[13px] font-medium text-white tracking-wide">
+        Complexity
+      </h2>
+      {isLoading ? (
+        <p className="text-xs bg-gradient-to-r from-gray-300 via-gray-100 to-gray-300 bg-clip-text text-transparent animate-pulse">
+          Calculating complexity...
+        </p>
+      ) : (
+        <div className="space-y-3">
+          <div className="text-[13px] leading-[1.4] text-gray-100 bg-white/5 rounded-md p-3">
+            <div className="flex items-start gap-2">
+              <div className="w-1 h-1 rounded-full bg-blue-400/80 mt-2 shrink-0" />
+              <div>
+                <strong>Time:</strong> {formattedTimeComplexity}
+              </div>
+            </div>
+          </div>
+          <div className="text-[13px] leading-[1.4] text-gray-100 bg-white/5 rounded-md p-3">
+            <div className="flex items-start gap-2">
+              <div className="w-1 h-1 rounded-full bg-blue-400/80 mt-2 shrink-0" />
+              <div>
+                <strong>Space:</strong> {formattedSpaceComplexity}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
-interface AnthropicMessage {
-  role: 'user' | 'assistant';
-  content: Array<{
-    type: 'text' | 'image';
-    text?: string;
-    source?: {
-      type: 'base64';
-      media_type: string;
-      data: string;
-    };
-  }>;
+
+export interface SolutionsProps {
+  setView: (view: "queue" | "solutions" | "debug") => void
+  credits: number
+  currentLanguage: string
+  setLanguage: (language: string) => void
 }
+const Solutions: React.FC<SolutionsProps> = ({
+  setView,
+  credits,
+  currentLanguage,
+  setLanguage
+}) => {
+  const queryClient = useQueryClient()
+  const contentRef = useRef<HTMLDivElement>(null)
 
-export class ProcessingHelper {
-  private deps: IProcessingHelperDeps
-  private screenshotHelper: ScreenshotHelper
-  private openaiClient: OpenAI | null = null
-  private geminiApiKey: string | null = null
-  private anthropicClient: Anthropic | null = null
-  // AbortControllers for API requests
-  private currentProcessingAbortController: AbortController | null = null
-  private currentExtraProcessingAbortController: AbortController | null = null
+  const [debugProcessing, setDebugProcessing] = useState(false)
+  const [problemStatementData, setProblemStatementData] =
+    useState<ProblemStatementData | null>(null)
+  const [solutionData, setSolutionData] = useState<string | null>(null)
+  const [thoughtsData, setThoughtsData] = useState<string[] | null>(null)
+  const [timeComplexityData, setTimeComplexityData] = useState<string | null>(
+    null
+  )
+  const [spaceComplexityData, setSpaceComplexityData] = useState<string | null>(
+    null
+  )
 
-  constructor(deps: IProcessingHelperDeps) {
-    this.deps = deps
-    this.screenshotHelper = deps.getScreenshotHelper()
-    // Initialize AI client based on config
-    this.initializeAIClient();
-    // Listen for config changes to re-initialize the AI client
-    configHelper.on('config-updated', () => {
-      this.initializeAIClient();
-    });
+  const [isTooltipVisible, setIsTooltipVisible] = useState(false)
+  const [tooltipHeight, setTooltipHeight] = useState(0)
+
+  const [isResetting, setIsResetting] = useState(false)
+
+  interface Screenshot {
+    id: string
+    path: string
+    preview: string
+    timestamp: number
   }
 
-  /**
-   * Initialize or reinitialize the AI client with current config
-   */
-  private initializeAIClient(): void {
-    try {
-      const config = configHelper.loadConfig();
-      if (config.apiProvider === "openai") {
-        if (config.apiKey) {
-          this.openaiClient = new OpenAI({
-            apiKey: config.apiKey,
-            timeout: 60000, // 60 second timeout
-            maxRetries: 2   // Retry up to 2 times
-          });
-          this.geminiApiKey = null;
-          this.anthropicClient = null;
-          console.log("OpenAI client initialized successfully");
-        } else {
-          this.openaiClient = null;
-          this.geminiApiKey = null;
-          this.anthropicClient = null;
-          console.warn("No API key available, OpenAI client not initialized");
-        }
-      } else if (config.apiProvider === "gemini") {
-        // Gemini client initialization
-        this.openaiClient = null;
-        this.anthropicClient = null;
-        if (config.apiKey) {
-          this.geminiApiKey = config.apiKey;
-          console.log("Gemini API key set successfully");
-        } else {
-          this.openaiClient = null;
-          this.geminiApiKey = null;
-          this.anthropicClient = null;
-          console.warn("No API key available, Gemini client not initialized");
-        }
-      } else if (config.apiProvider === "anthropic") {
-        // Reset other clients
-        this.openaiClient = null;
-        this.geminiApiKey = null;
-        if (config.apiKey) {
-          this.anthropicClient = new Anthropic({
-            apiKey: config.apiKey,
-            timeout: 60000,
-            maxRetries: 2
-          });
-          console.log("Anthropic client initialized successfully");
-        } else {
-          this.openaiClient = null;
-          this.geminiApiKey = null;
-          this.anthropicClient = null;
-          console.warn("No API key available, Anthropic client not initialized");
-        }
-      }
-    } catch (error) {
-      console.error("Failed to initialize AI client:", error);
-      this.openaiClient = null;
-      this.geminiApiKey = null;
-      this.anthropicClient = null;
-    }
-  }
+  const [extraScreenshots, setExtraScreenshots] = useState<Screenshot[]>([])
 
-  private async waitForInitialization(
-    mainWindow: BrowserWindow
-  ): Promise<void> {
-    let attempts = 0
-    const maxAttempts = 50 // 5 seconds total
-    while (attempts < maxAttempts) {
-      const isInitialized = await mainWindow.webContents.executeJavaScript(
-        "window.__IS_INITIALIZED__"
-      )
-      if (isInitialized) return
-      await new Promise((resolve) => setTimeout(resolve, 100))
-      attempts++
-    }
-    throw new Error("App failed to initialize after 5 seconds")
-  }
-
-  private async getCredits(): Promise<number> {
-    const mainWindow = this.deps.getMainWindow()
-    if (!mainWindow) return 999 // Unlimited credits in this version
-    try {
-      await this.waitForInitialization(mainWindow)
-      return 999 // Always return sufficient credits to work
-    } catch (error) {
-      console.error("Error getting credits:", error)
-      return 999 // Unlimited credits as fallback
-    }
-  }
-
-  private async getLanguage(): Promise<string> {
-    try {
-      // Get language from config
-      const config = configHelper.loadConfig();
-      if (config.language) {
-        return config.language;
-      }
-      // Fallback to window variable if config doesn't have language
-      const mainWindow = this.deps.getMainWindow()
-      if (mainWindow) {
-        try {
-          await this.waitForInitialization(mainWindow)
-          const language = await mainWindow.webContents.executeJavaScript(
-            "window.__LANGUAGE__"
-          )
-          if (
-            typeof language === "string" &&
-            language !== undefined &&
-            language !== null
-          ) {
-            return language;
-          }
-        } catch (err) {
-          console.warn("Could not get language from window", err);
-        }
-      }
-      // Default fallback
-      return "python"; // Keeping default as 'python' for consistency, though it's less relevant now
-    } catch (error) {
-      console.error("Error getting language:", error)
-      return "python"
-    }
-  }
-
-  public async processScreenshots(): Promise<void> {
-    const mainWindow = this.deps.getMainWindow()
-    if (!mainWindow) return
-    const config = configHelper.loadConfig();
-    // First verify we have a valid AI client
-    if (config.apiProvider === "openai" && !this.openaiClient) {
-      this.initializeAIClient();
-      if (!this.openaiClient) {
-        console.error("OpenAI client not initialized");
-        mainWindow.webContents.send(
-          this.deps.PROCESSING_EVENTS.API_KEY_INVALID
-        );
-        return;
-      }
-    } else if (config.apiProvider === "gemini" && !this.geminiApiKey) {
-      this.initializeAIClient();
-      if (!this.geminiApiKey) {
-        console.error("Gemini API key not initialized");
-        mainWindow.webContents.send(
-          this.deps.PROCESSING_EVENTS.API_KEY_INVALID
-        );
-        return;
-      }
-    } else if (config.apiProvider === "anthropic" && !this.anthropicClient) {
-      // Add check for Anthropic client
-      this.initializeAIClient();
-      if (!this.anthropicClient) {
-        console.error("Anthropic client not initialized");
-        mainWindow.webContents.send(
-          this.deps.PROCESSING_EVENTS.API_KEY_INVALID
-        );
-        return;
-      }
-    }
-    const view = this.deps.getView()
-    console.log("Processing screenshots in view:", view)
-    if (view === "queue") {
-      mainWindow.webContents.send(this.deps.PROCESSING_EVENTS.INITIAL_START)
-      const screenshotQueue = this.screenshotHelper.getScreenshotQueue()
-      console.log("Processing main queue screenshots:", screenshotQueue)
-      // Check if the queue is empty
-      if (!screenshotQueue || screenshotQueue.length === 0) {
-        console.log("No screenshots found in queue");
-        mainWindow.webContents.send(this.deps.PROCESSING_EVENTS.NO_SCREENSHOTS);
-        return;
-      }
-      // Check that files actually exist
-      const existingScreenshots = screenshotQueue.filter(path => fs.existsSync(path));
-      if (existingScreenshots.length === 0) {
-        console.log("Screenshot files don't exist on disk");
-        mainWindow.webContents.send(this.deps.PROCESSING_EVENTS.NO_SCREENSHOTS);
-        return;
-      }
+  useEffect(() => {
+    const fetchScreenshots = async () => {
       try {
-        // Initialize AbortController
-        this.currentProcessingAbortController = new AbortController()
-        const { signal } = this.currentProcessingAbortController
-        const screenshots = await Promise.all(
-          existingScreenshots.map(async (path) => {
-            try {
-              return {
-                path,
-                preview: await this.screenshotHelper.getImagePreview(path),
-                data: fs.readFileSync(path).toString('base64')
-              };
-            } catch (err) {
-              console.error(`Error reading screenshot ${path}:`, err);
-              return null;
-            }
+        const existing = await window.electronAPI.getScreenshots()
+        console.log("Raw screenshot data:", existing)
+        const screenshots = (Array.isArray(existing) ? existing : []).map(
+          (p) => ({
+            id: p.path,
+            path: p.path,
+            preview: p.preview,
+            timestamp: Date.now()
           })
         )
-        // Filter out any nulls from failed screenshots
-        const validScreenshots = screenshots.filter(Boolean);
-        if (validScreenshots.length === 0) {
-          throw new Error("Failed to load screenshot data");
+        console.log("Processed screenshots:", screenshots)
+        setExtraScreenshots(screenshots)
+      } catch (error) {
+        console.error("Error loading extra screenshots:", error)
+        setExtraScreenshots([])
+      }
+    }
+
+    fetchScreenshots()
+  }, [solutionData])
+
+  const { showToast } = useToast()
+
+  useEffect(() => {
+    // Height update logic
+    const updateDimensions = () => {
+      if (contentRef.current) {
+        let contentHeight = contentRef.current.scrollHeight
+        const contentWidth = contentRef.current.scrollWidth
+        if (isTooltipVisible) {
+          contentHeight += tooltipHeight
         }
-        const result = await this.processScreenshotsHelper(validScreenshots, signal)
-        if (!result.success) {
-          console.log("Processing failed:", result.error)
-          if (result.error?.includes("API Key") || result.error?.includes("OpenAI") || result.error?.includes("Gemini")) {
-            mainWindow.webContents.send(
-              this.deps.PROCESSING_EVENTS.API_KEY_INVALID
-            )
-          } else {
-            mainWindow.webContents.send(
-              this.deps.PROCESSING_EVENTS.INITIAL_SOLUTION_ERROR,
-              result.error
-            )
-          }
-          // Reset view back to queue on error
-          console.log("Resetting view to queue due to error")
-          this.deps.setView("queue")
+        window.electronAPI.updateContentDimensions({
+          width: contentWidth,
+          height: contentHeight
+        })
+      }
+    }
+
+    // Initialize resize observer
+    const resizeObserver = new ResizeObserver(updateDimensions)
+    if (contentRef.current) {
+      resizeObserver.observe(contentRef.current)
+    }
+    updateDimensions()
+
+    // Set up event listeners
+    const cleanupFunctions = [
+      window.electronAPI.onScreenshotTaken(async () => {
+        try {
+          const existing = await window.electronAPI.getScreenshots()
+          const screenshots = (Array.isArray(existing) ? existing : []).map(
+            (p) => ({
+              id: p.path,
+              path: p.path,
+              preview: p.preview,
+              timestamp: Date.now()
+            })
+          )
+          setExtraScreenshots(screenshots)
+        } catch (error) {
+          console.error("Error loading extra screenshots:", error)
+        }
+      }),
+      window.electronAPI.onResetView(() => {
+        // Set resetting state first
+        setIsResetting(true)
+
+        // Remove queries
+        queryClient.removeQueries({
+          queryKey: ["solution"]
+        })
+        queryClient.removeQueries({
+          queryKey: ["new_solution"]
+        })
+
+        // Reset screenshots
+        setExtraScreenshots([])
+
+        // After a small delay, clear the resetting state
+        setTimeout(() => {
+          setIsResetting(false)
+        }, 0)
+      }),
+      window.electronAPI.onSolutionStart(() => {
+        // Every time processing starts, reset relevant states
+        setSolutionData(null)
+        setThoughtsData(null)
+        setTimeComplexityData(null)
+        setSpaceComplexityData(null)
+      }),
+      window.electronAPI.onProblemExtracted((data) => {
+        queryClient.setQueryData(["problem_statement"], data)
+      }),
+      //if there was an error processing the initial solution
+      window.electronAPI.onSolutionError((error: string) => {
+        showToast("Processing Failed", error, "error")
+        // Reset solutions in the cache (even though this shouldn't ever happen) and complexities to previous states
+        const solution = queryClient.getQueryData(["solution"]) as {
+          code: string
+          thoughts: string[]
+          time_complexity: string
+          space_complexity: string
+        } | null
+        if (!solution) {
+          setView("queue")
+        }
+        setSolutionData(solution?.code || null)
+        setThoughtsData(solution?.thoughts || null)
+        setTimeComplexityData(solution?.time_complexity || null)
+        setSpaceComplexityData(solution?.space_complexity || null)
+        console.error("Processing error:", error)
+      }),
+      //when the initial solution is generated, we'll set the solution data to that
+      window.electronAPI.onSolutionSuccess((data) => {
+        if (!data) {
+          console.warn("Received empty or invalid solution data")
           return
         }
-        // Only set view to solutions if processing succeeded
-        console.log("Setting view to solutions after successful processing")
-        mainWindow.webContents.send(
-          this.deps.PROCESSING_EVENTS.SOLUTION_SUCCESS,
-          result.data
-        )
-        this.deps.setView("solutions")
-      } catch (error: any) {
-        mainWindow.webContents.send(
-          this.deps.PROCESSING_EVENTS.INITIAL_SOLUTION_ERROR,
-          error
-        )
-        console.error("Processing error:", error)
-        if (axios.isCancel(error)) {
-          mainWindow.webContents.send(
-            this.deps.PROCESSING_EVENTS.INITIAL_SOLUTION_ERROR,
-            "Processing was canceled by the user."
-          )
-        } else {
-          mainWindow.webContents.send(
-            this.deps.PROCESSING_EVENTS.INITIAL_SOLUTION_ERROR,
-            error.message || "Server error. Please try again."
-          )
+        console.log({ data })
+        const solutionData = {
+          code: data.code,
+          thoughts: data.thoughts,
+          time_complexity: data.time_complexity,
+          space_complexity: data.space_complexity
         }
-        // Reset view back to queue on error
-        console.log("Resetting view to queue due to error")
-        this.deps.setView("queue")
-      } finally {
-        this.currentProcessingAbortController = null
+
+        queryClient.setQueryData(["solution"], solutionData)
+        setSolutionData(solutionData.code || null)
+        setThoughtsData(solutionData.thoughts || null)
+        setTimeComplexityData(solutionData.time_complexity || null)
+        setSpaceComplexityData(solutionData.space_complexity || null)
+
+        // Fetch latest screenshots when solution is successful
+        const fetchScreenshots = async () => {
+          try {
+            const existing = await window.electronAPI.getScreenshots()
+            const screenshots =
+              existing.previews?.map((p) => ({
+                id: p.path,
+                path: p.path,
+                preview: p.preview,
+                timestamp: Date.now()
+              })) || []
+            setExtraScreenshots(screenshots)
+          } catch (error) {
+            console.error("Error loading extra screenshots:", error)
+            setExtraScreenshots([])
+          }
+        }
+        fetchScreenshots()
+      }),
+
+      //########################################################
+      //DEBUG EVENTS
+      //########################################################
+      window.electronAPI.onDebugStart(() => {
+        //we'll set the debug processing state to true and use that to render a little loader
+        setDebugProcessing(true)
+      }),
+      //the first time debugging works, we'll set the view to debug and populate the cache with the data
+      window.electronAPI.onDebugSuccess((data) => {
+        queryClient.setQueryData(["new_solution"], data)
+        setDebugProcessing(false)
+      }),
+      //when there was an error in the initial debugging, we'll show a toast and stop the little generating pulsing thing.
+      window.electronAPI.onDebugError(() => {
+        showToast(
+          "Processing Failed",
+          "There was an error debugging your code.",
+          "error"
+        )
+        setDebugProcessing(false)
+      }),
+      window.electronAPI.onProcessingNoScreenshots(() => {
+        showToast(
+          "No Screenshots",
+          "There are no extra screenshots to process.",
+          "neutral"
+        )
+      }),
+      // Removed out of credits handler - unlimited credits in this version
+    ]
+
+    return () => {
+      resizeObserver.disconnect()
+      cleanupFunctions.forEach((cleanup) => cleanup())
+    }
+  }, [isTooltipVisible, tooltipHeight])
+
+  useEffect(() => {
+    setProblemStatementData(
+      queryClient.getQueryData(["problem_statement"]) || null
+    )
+    setSolutionData(queryClient.getQueryData(["solution"]) || null)
+
+    const unsubscribe = queryClient.getQueryCache().subscribe((event) => {
+      if (event?.query.queryKey[0] === "problem_statement") {
+        setProblemStatementData(
+          queryClient.getQueryData(["problem_statement"]) || null
+        )
       }
-    } else {
-      // view == 'solutions'
-      const extraScreenshotQueue =
-        this.screenshotHelper.getExtraScreenshotQueue()
-      console.log("Processing extra queue screenshots:", extraScreenshotQueue)
-      // Check if the extra queue is empty
-      if (!extraScreenshotQueue || extraScreenshotQueue.length === 0) {
-        console.log("No extra screenshots found in queue");
-        mainWindow.webContents.send(this.deps.PROCESSING_EVENTS.NO_SCREENSHOTS);
-        return;
+      if (event?.query.queryKey[0] === "solution") {
+        const solution = queryClient.getQueryData(["solution"]) as {
+          code: string
+          thoughts: string[]
+          time_complexity: string
+          space_complexity: string
+        } | null
+
+        setSolutionData(solution?.code ?? null)
+        setThoughtsData(solution?.thoughts ?? null)
+        setTimeComplexityData(solution?.time_complexity ?? null)
+        setSpaceComplexityData(solution?.space_complexity ?? null)
       }
-      // Check that files actually exist
-      const existingExtraScreenshots = extraScreenshotQueue.filter(path => fs.existsSync(path));
-      if (existingExtraScreenshots.length === 0) {
-        console.log("Extra screenshot files don't exist on disk");
-        mainWindow.webContents.send(this.deps.PROCESSING_EVENTS.NO_SCREENSHOTS);
-        return;
-      }
-      mainWindow.webContents.send(this.deps.PROCESSING_EVENTS.DEBUG_START)
-      // Initialize AbortController
-      this.currentExtraProcessingAbortController = new AbortController()
-      const { signal } = this.currentExtraProcessingAbortController
-      try {
-        // Get all screenshots (both main and extra) for processing
-        const allPaths = [
-          ...this.screenshotHelper.getScreenshotQueue(),
-          ...existingExtraScreenshots
-        ];
-        const screenshots = await Promise.all(
-          allPaths.map(async (path) => {
-            try {
-              if (!fs.existsSync(path)) {
-                console.warn(`Screenshot file does not exist: ${path}`);
-                return null;
-              }
-              return {
-                path,
-                preview: await this.screenshotHelper.getImagePreview(path),
-                data: fs.readFileSync(path).toString('base64')
-              };
-            } catch (err) {
-              console.error(`Error reading screenshot ${path}:`, err);
-              return null;
-            }
+    })
+    return () => unsubscribe()
+  }, [queryClient])
+
+  const handleTooltipVisibilityChange = (visible: boolean, height: number) => {
+    setIsTooltipVisible(visible)
+    setTooltipHeight(height)
+  }
+
+  const handleDeleteExtraScreenshot = async (index: number) => {
+    const screenshotToDelete = extraScreenshots[index]
+
+    try {
+      const response = await window.electronAPI.deleteScreenshot(
+        screenshotToDelete.path
+      )
+
+      if (response.success) {
+        // Fetch and update screenshots after successful deletion
+        const existing = await window.electronAPI.getScreenshots()
+        const screenshots = (Array.isArray(existing) ? existing : []).map(
+          (p) => ({
+            id: p.path,
+            path: p.path,
+            preview: p.preview,
+            timestamp: Date.now()
           })
         )
-        // Filter out any nulls from failed screenshots
-        const validScreenshots = screenshots.filter(Boolean);
-        if (validScreenshots.length === 0) {
-          throw new Error("Failed to load screenshot data for debugging");
-        }
-        console.log(
-          "Combined screenshots for processing:",
-          validScreenshots.map((s) => s.path)
-        )
-        const result = await this.processExtraScreenshotsHelper(
-          validScreenshots,
-          signal
-        )
-        if (result.success) {
-          this.deps.setHasDebugged(true)
-          mainWindow.webContents.send(
-            this.deps.PROCESSING_EVENTS.DEBUG_SUCCESS,
-            result.data
-          )
-        } else {
-          mainWindow.webContents.send(
-            this.deps.PROCESSING_EVENTS.DEBUG_ERROR,
-            result.error
-          )
-        }
-      } catch (error: any) {
-        if (axios.isCancel(error)) {
-          mainWindow.webContents.send(
-            this.deps.PROCESSING_EVENTS.DEBUG_ERROR,
-            "Extra processing was canceled by the user."
-          )
-        } else {
-          mainWindow.webContents.send(
-            this.deps.PROCESSING_EVENTS.DEBUG_ERROR,
-            error.message
-          )
-        }
-      } finally {
-        this.currentExtraProcessingAbortController = null
+        setExtraScreenshots(screenshots)
+      } else {
+        console.error("Failed to delete extra screenshot:", response.error)
+        showToast("Error", "Failed to delete the screenshot", "error")
       }
+    } catch (error) {
+      console.error("Error deleting extra screenshot:", error)
+      showToast("Error", "Failed to delete the screenshot", "error")
     }
   }
 
-  private async processScreenshotsHelper(
-    screenshots: Array<{ path: string; data: string }>,
-    signal: AbortSignal
-  ) {
-    try {
-      const config = configHelper.loadConfig();
-      const language = await this.getLanguage();
-      const mainWindow = this.deps.getMainWindow();
-      // Step 1: Extract problem info using AI Vision API (OpenAI or Gemini)
-      const imageDataList = screenshots.map(screenshot => screenshot.data);
-      // Update the user on progress
-      if (mainWindow) {
-        mainWindow.webContents.send("processing-status", {
-          message: "Analyzing aptitude problem from screenshots...",
-          progress: 20
-        });
-      }
-      let problemInfo;
-      if (config.apiProvider === "openai") {
-        // Verify OpenAI client
-        if (!this.openaiClient) {
-          this.initializeAIClient(); // Try to reinitialize
-          if (!this.openaiClient) {
-            return {
-              success: false,
-              error: "OpenAI API key not configured or invalid. Please check your settings."
-            };
-          }
-        }
-        // Use OpenAI for processing
-        const messages = [
-          {
-            role: "system" as const,
-            content: "You are an aptitude problem interpreter. Analyze the screenshot(s) of the aptitude question and extract all relevant information. Return the information in JSON format with these fields: problem_statement, constraints, example_input, example_output. Just return the structured JSON without any other text."
-          },
-          {
-            role: "user" as const,
-            content: [
-              {
-                type: "text" as const,
-                text: `Extract the aptitude problem details from these screenshots. Return in JSON format. The problem is related to aptitude tests (e.g., quantitative, logical, verbal).`
-              },
-              ...imageDataList.map(data => ({
-                type: "image_url" as const,
-                image_url: { url: `data:image/png;base64,${data}` }
-              }))
-            ]
-          }
-        ];
-        // Send to OpenAI Vision API
-        const extractionResponse = await this.openaiClient.chat.completions.create({
-          model: config.extractionModel || "gpt-4o",
-          messages: messages,
-          max_tokens: 4000,
-          temperature: 0.2
-        });
-        // Parse the response
-        try {
-          const responseText = extractionResponse.choices[0].message.content;
-          // Handle when OpenAI might wrap the JSON in markdown code blocks
-          const jsonText = responseText.replace(/```json|```/g, '').trim();
-          problemInfo = JSON.parse(jsonText);
-        } catch (error) {
-          console.error("Error parsing OpenAI response:", error);
-          return {
-            success: false,
-            error: "Failed to parse problem information. Please try again or use clearer screenshots."
-          };
-        }
-      } else if (config.apiProvider === "gemini") {
-        // Use Gemini API
-        if (!this.geminiApiKey) {
-          return {
-            success: false,
-            error: "Gemini API key not configured. Please check your settings."
-          };
-        }
-        try {
-          // Create Gemini message structure
-          const geminiMessages: GeminiMessage[] = [
-            {
-              role: "user",
-              parts: [
-                {
-                  text: `You are an aptitude problem interpreter. Analyze the screenshots of the aptitude question and extract all relevant information. Return the information in JSON format with these fields: problem_statement, constraints, example_input, example_output. Just return the structured JSON without any other text. The problem is related to aptitude tests (e.g., quantitative, logical, verbal).`
-                },
-                ...imageDataList.map(data => ({
-                  inlineData: {
-                    mimeType: "image/png",
-                    data: data
-                  }
-                }))
-              ]
-            }
-          ];
-          // Make API request to Gemini
-          const response = await axios.default.post(
-            `https://generativelanguage.googleapis.com/v1beta/models/${config.extractionModel || "gemini-2.0-flash"}:generateContent?key=${this.geminiApiKey}`,
-            {
-              contents: geminiMessages,
-              generationConfig: {
-                temperature: 0.2,
-                maxOutputTokens: 4000
-              }
-            },
-            { signal }
-          );
-          const responseData = response.data as GeminiResponse;
-          if (!responseData.candidates || responseData.candidates.length === 0) {
-            throw new Error("Empty response from Gemini API");
-          }
-          const responseText = responseData.candidates[0].content.parts[0].text;
-          // Handle when Gemini might wrap the JSON in markdown code blocks
-          const jsonText = responseText.replace(/```json|```/g, '').trim();
-          problemInfo = JSON.parse(jsonText);
-        } catch (error) {
-          console.error("Error using Gemini API:", error);
-          return {
-            success: false,
-            error: "Failed to process with Gemini API. Please check your API key or try again later."
-          };
-        }
-      } else if (config.apiProvider === "anthropic") {
-        if (!this.anthropicClient) {
-          return {
-            success: false,
-            error: "Anthropic API key not configured. Please check your settings."
-          };
-        }
-        try {
-          const messages = [
-            {
-              role: "user" as const,
-              content: [
-                {
-                  type: "text" as const,
-                  text: `Extract the aptitude problem details from these screenshots. Return in JSON format with these fields: problem_statement, constraints, example_input, example_output. The problem is related to aptitude tests (e.g., quantitative, logical, verbal).`
-                },
-                ...imageDataList.map(data => ({
-                  type: "image" as const,
-                  source: {
-                    type: "base64" as const,
-                    media_type: "image/png" as const,
-                    data: data
-                  }
-                }))
-              ]
-            }
-          ];
-          const response = await this.anthropicClient.messages.create({
-            model: config.extractionModel || "claude-3-7-sonnet-20250219",
-            max_tokens: 4000,
-            messages: messages,
-            temperature: 0.2
-          });
-          const responseText = (response.content[0] as { type: 'text', text: string }).text;
-          const jsonText = responseText.replace(/```json|```/g, '').trim();
-          problemInfo = JSON.parse(jsonText);
-        } catch (error: any) {
-          console.error("Error using Anthropic API:", error);
-          // Add specific handling for Claude's limitations
-          if (error.status === 429) {
-            return {
-              success: false,
-              error: "Claude API rate limit exceeded. Please wait a few minutes before trying again."
-            };
-          } else if (error.status === 413 || (error.message && error.message.includes("token"))) {
-            return {
-              success: false,
-              error: "Your screenshots contain too much information for Claude to process. Switch to OpenAI or Gemini in settings which can handle larger inputs."
-            };
-          }
-          return {
-            success: false,
-            error: "Failed to process with Anthropic API. Please check your API key or try again later."
-          };
-        }
-      }
-      // Update the user on progress
-      if (mainWindow) {
-        mainWindow.webContents.send("processing-status", {
-          message: "Problem analyzed successfully. Preparing to generate solution...",
-          progress: 40
-        });
-      }
-      // Store problem info in AppState
-      this.deps.setProblemInfo(problemInfo);
-      // Send first success event
-      if (mainWindow) {
-        mainWindow.webContents.send(
-          this.deps.PROCESSING_EVENTS.PROBLEM_EXTRACTED,
-          problemInfo
-        );
-        // Generate solutions after successful extraction
-        const solutionsResult = await this.generateSolutionsHelper(signal, problemInfo);
-        if (solutionsResult.success) {
-          // Clear any existing extra screenshots before transitioning to solutions view
-          this.screenshotHelper.clearExtraScreenshotQueue();
-          // Final progress update
-          mainWindow.webContents.send("processing-status", {
-            message: "Aptitude solution generated successfully",
-            progress: 100
-          });
-          mainWindow.webContents.send(
-            this.deps.PROCESSING_EVENTS.SOLUTION_SUCCESS,
-            solutionsResult.data
-          );
-          return { success: true, data: solutionsResult.data };
-        } else {
-          throw new Error(
-            solutionsResult.error || "Failed to generate solutions"
-          );
-        }
-      }
-      return { success: false, error: "Failed to process screenshots" };
-    } catch (error: any) {
-      // If the request was cancelled, don't retry
-      if (axios.isCancel(error)) {
-        return {
-          success: false,
-          error: "Processing was canceled by the user."
-        };
-      }
-      // Handle OpenAI API errors specifically
-      if (error?.response?.status === 401) {
-        return {
-          success: false,
-          error: "Invalid OpenAI API key. Please check your settings."
-        };
-      } else if (error?.response?.status === 429) {
-        return {
-          success: false,
-          error: "OpenAI API rate limit exceeded or insufficient credits. Please try again later."
-        };
-      } else if (error?.response?.status === 500) {
-        return {
-          success: false,
-          error: "OpenAI server error. Please try again later."
-        };
-      }
-      console.error("API Error Details:", error);
-      return {
-        success: false,
-        error: error.message || "Failed to process screenshots. Please try again."
-      };
-    }
-  }
+  return (
+    <>
+      {!isResetting && queryClient.getQueryData(["new_solution"]) ? (
+        <Debug
+          isProcessing={debugProcessing}
+          setIsProcessing={setDebugProcessing}
+          currentLanguage={currentLanguage}
+          setLanguage={setLanguage}
+        />
+      ) : (
+        <div ref={contentRef} className="relative">
+          <div className="space-y-3 px-4 py-3">
+          {/* Conditionally render the screenshot queue if solutionData is available */}
+          {solutionData && (
+            <div className="bg-transparent w-fit">
+              <div className="pb-3">
+                <div className="space-y-3 w-fit">
+                  <ScreenshotQueue
+                    isLoading={debugProcessing}
+                    screenshots={extraScreenshots}
+                    onDeleteScreenshot={handleDeleteExtraScreenshot}
+                  />
+                </div>
+              </div>
+            </div>
+          )}
 
-  // Modified generateSolutionsHelper to handle aptitude problems and return compatible structure
-  private async generateSolutionsHelper(signal: AbortSignal, problemInfo: any) { // Now receives problemInfo as argument
-    try {
-      // const problemInfo = this.deps.getProblemInfo(); // Now passed as argument
-      const language = await this.getLanguage();
-      const config = configHelper.loadConfig();
-      const mainWindow = this.deps.getMainWindow();
-      if (!problemInfo) {
-        throw new Error("No problem info available");
-      }
+          {/* Navbar of commands with the SolutionsHelper */}
+          <SolutionCommands
+            onTooltipVisibilityChange={handleTooltipVisibilityChange}
+            isProcessing={!problemStatementData || !solutionData}
+            extraScreenshots={extraScreenshots}
+            credits={credits}
+            currentLanguage={currentLanguage}
+            setLanguage={setLanguage}
+          />
 
-      // Update progress status
-      if (mainWindow) {
-        mainWindow.webContents.send("processing-status", {
-          message: "Creating aptitude solution with detailed explanations...",
-          progress: 60
-        });
-      }
+          {/* Main Content - Modified width constraints */}
+          <div className="w-full text-sm text-black bg-black/60 rounded-md">
+            <div className="rounded-lg overflow-hidden">
+              <div className="px-4 py-3 space-y-4 max-w-full">
+                {!solutionData && (
+                  <>
+                    <ContentSection
+                      title="Problem Statement"
+                      content={problemStatementData?.problem_statement}
+                      isLoading={!problemStatementData}
+                    />
+                    {problemStatementData && (
+                      <div className="mt-4 flex">
+                        <p className="text-xs bg-gradient-to-r from-gray-300 via-gray-100 to-gray-300 bg-clip-text text-transparent animate-pulse">
+                          Generating solutions...
+                        </p>
+                      </div>
+                    )}
+                  </>
+                )}
 
-      // Create prompt for aptitude solution generation
-      const promptText = `
-Analyze and solve the following aptitude problem:
-PROBLEM STATEMENT:
-${problemInfo.problem_statement || problemInfo.problemDescription || problemInfo.question}
+                {solutionData && (
+                  <>
+                    <ContentSection
+                      title={`My Thoughts (${COMMAND_KEY} + Arrow keys to scroll)`}
+                      content={
+                        thoughtsData && (
+                          <div className="space-y-3">
+                            <div className="space-y-1">
+                              {thoughtsData.map((thought, index) => (
+                                <div
+                                  key={index}
+                                  className="flex items-start gap-2"
+                                >
+                                  <div className="w-1 h-1 rounded-full bg-blue-400/80 mt-2 shrink-0" />
+                                  <div>{thought}</div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )
+                      }
+                      isLoading={!thoughtsData}
+                    />
 
-Generate the correct answer and provide a clear, step-by-step explanation of the solution process.
-If the question is a multiple-choice question, please format your response as:
-1. Option No. : Answer
-2. Explanation: [Provide a short explanation]
+                    <SolutionSection
+                      title="Solution"
+                      content={solutionData}
+                      isLoading={!solutionData}
+                      currentLanguage={currentLanguage}
+                    />
 
-If it's not multiple-choice, just provide the answer and the explanation.
-`;
-
-      let responseContent;
-      if (config.apiProvider === "openai") {
-        // OpenAI processing
-        if (!this.openaiClient) {
-          return {
-            success: false,
-            error: "OpenAI API key not configured. Please check your settings."
-          };
-        }
-        // Send to OpenAI API
-        const solutionResponse = await this.openaiClient.chat.completions.create({
-          model: config.solutionModel || "gpt-4o",
-          messages: [
-            { role: "system", content: "You are an expert aptitude test assistant. Provide clear, correct solutions with detailed explanations for aptitude problems." },
-            { role: "user", content: promptText }
-          ],
-          max_tokens: 4000,
-          temperature: 0.2
-        });
-        responseContent = solutionResponse.choices[0].message.content;
-      } else if (config.apiProvider === "gemini") {
-        // Gemini processing
-        if (!this.geminiApiKey) {
-          return {
-            success: false,
-            error: "Gemini API key not configured. Please check your settings."
-          };
-        }
-        try {
-          // Create Gemini message structure
-          const geminiMessages = [
-            {
-              role: "user",
-              parts: [
-                {
-                  text: `You are an Intelligent AI Assistant that helps solve Aptitude problems ( asked in Aptitude rounds of JOB interviews ) with the correct answer and explanation. Solve the following problem:
-${promptText}`
-                }
-              ]
-            }
-          ];
-          // Make API request to Gemini
-          const response = await axios.default.post(
-            `https://generativelanguage.googleapis.com/v1beta/models/${config.solutionModel || "gemini-2.0-flash"}:generateContent?key=${this.geminiApiKey}`,
-            {
-              contents: geminiMessages,
-              generationConfig: {
-                temperature: 0.2,
-                maxOutputTokens: 4000
-              }
-            },
-            { signal }
-          );
-          const responseData = response.data as GeminiResponse;
-          if (!responseData.candidates || responseData.candidates.length === 0) {
-            throw new Error("Empty response from Gemini API");
-          }
-          responseContent = responseData.candidates[0].content.parts[0].text;
-        } catch (error) {
-          console.error("Error using Gemini API for solution:", error);
-          return {
-            success: false,
-            error: "Failed to generate solution with Gemini API. Please check your API key or try again later."
-          };
-        }
-      } else if (config.apiProvider === "anthropic") {
-        // Anthropic processing
-        if (!this.anthropicClient) {
-          return {
-            success: false,
-            error: "Anthropic API key not configured. Please check your settings."
-          };
-        }
-        try {
-          const messages = [
-            {
-              role: "user" as const,
-              content: [
-                {
-                  type: "text" as const,
-                  text: `You are an expert aptitude test assistant. Provide a clear, correct solution with a detailed explanation for this aptitude problem:
-${promptText}`
-                }
-              ]
-            }
-          ];
-          // Send to Anthropic API
-          const response = await this.anthropicClient.messages.create({
-            model: config.solutionModel || "claude-3-7-sonnet-20250219",
-            max_tokens: 4000,
-            messages: messages,
-            temperature: 0.2
-          });
-          responseContent = (response.content[0] as { type: 'text', text: string }).text;
-        } catch (error: any) {
-          console.error("Error using Anthropic API for solution:", error);
-          // Add specific handling for Claude's limitations
-          if (error.status === 429) {
-            return {
-              success: false,
-              error: "Claude API rate limit exceeded. Please wait a few minutes before trying again."
-            };
-          } else if (error.status === 413 || (error.message && error.message.includes("token"))) {
-            return {
-              success: false,
-              error: "Your problem statement contains too much information for Claude to process. Switch to OpenAI or Gemini in settings which can handle larger inputs."
-            };
-          }
-          return {
-            success: false,
-            error: "Failed to generate solution with Anthropic API. Please check your API key or try again later."
-          };
-        }
-      }
-
-      // --- Format the response to match the expected UI structure ---
-      // Place the full AI response (answer + explanation) into the 'code' field
-      const formattedResponse = {
-        code: responseContent, // This field will now contain the aptitude answer and explanation
-        thoughts: ["aldj"], // Placeholder for thoughts
-        time_complexity: "aldj", // Placeholder for time complexity
-        space_complexity: "aldj" // Placeholder for space complexity
-      };
-
-      return { success: true, data: formattedResponse };
-    } catch (error: any) {
-      if (axios.isCancel(error)) {
-        return {
-          success: false,
-          error: "Processing was canceled by the user."
-        };
-      }
-      if (error?.response?.status === 401) {
-        return {
-          success: false,
-          error: "Invalid OpenAI API key. Please check your settings."
-        };
-      } else if (error?.response?.status === 429) {
-        return {
-          success: false,
-          error: "OpenAI API rate limit exceeded or insufficient credits. Please try again later."
-        };
-      }
-      console.error("Aptitude solution generation error:", error);
-      return { success: false, error: error.message || "Failed to generate aptitude solution" };
-    }
-  }
-
-
-    private async processExtraScreenshotsHelper(
-    screenshots: Array<{ path: string;  string }>,
-    signal: AbortSignal
-  ) {
-    try {
-      const problemInfo = this.deps.getProblemInfo();
-      const language = await this.getLanguage(); // Keeping 'python' default for consistency, though less relevant now
-      const config = configHelper.loadConfig();
-      const mainWindow = this.deps.getMainWindow();
-      if (!problemInfo) {
-        throw new Error("No problem info available");
-      }
-      // Update progress status
-      if (mainWindow) {
-        mainWindow.webContents.send("processing-status", {
-          message: "Processing aptitude review screenshots...",
-          progress: 30
-        });
-      }
-      // Prepare the images for the API call
-      const imageDataList = screenshots.map(screenshot => screenshot.data);
-      let debugContent;
-      if (config.apiProvider === "openai") {
-        if (!this.openaiClient) {
-          return {
-            success: false,
-            error: "OpenAI API key not configured. Please check your settings."
-          };
-        }
-        const messages = [
-          {
-            role: "system" as const,
-            content: `You are an aptitude test assistant helping to review and provide feedback on solutions or reasoning. Analyze these screenshots which might include notes, alternative attempts, or clarifications, and provide detailed feedback.
-Your response MUST follow this exact structure with these section headers (use ### for headers):
-### Issues Identified
-- List each issue as a bullet point with clear explanation
-### Specific Improvements and Corrections
-- List specific changes needed to the reasoning or approach as bullet points
-### Optimizations
-- List any better approaches or shortcuts if applicable
-### Explanation of Changes Needed
-Here provide a clear explanation of why the changes are needed
-### Key Points
-- Summary bullet points of the most important takeaways
-If you include examples, use proper markdown code blocks if necessary.`
-          },
-          {
-            role: "user" as const,
-            content: [
-              {
-                type: "text" as const,
-                text: `I'm solving this aptitude problem: "${problemInfo.problem_statement}" in ${language}. I need help reviewing my approach or clarifying my reasoning. Here are screenshots of my work, notes, or alternative attempts. Please provide detailed feedback with:
-1. What issues you found in my approach or reasoning
-2. Specific improvements and corrections
-3. Any optimizations or better approaches
-4. A clear explanation of the changes needed`
-              },
-              ...imageDataList.map(data => ({
-                type: "image_url" as const,
-                image_url: { url: `image/png;base64,${data}` }
-              }))
-            ]
-          }
-        ];
-        if (mainWindow) {
-          mainWindow.webContents.send("processing-status", {
-            message: "Analyzing work and generating feedback...",
-            progress: 60
-          });
-        }
-        const debugResponse = await this.openaiClient.chat.completions.create({
-          model: config.debuggingModel || "gpt-4o",
-          messages: messages,
-          max_tokens: 4000,
-          temperature: 0.2
-        });
-        debugContent = debugResponse.choices[0].message.content;
-      } else if (config.apiProvider === "gemini") {
-        if (!this.geminiApiKey) {
-          return {
-            success: false,
-            error: "Gemini API key not configured. Please check your settings."
-          };
-        }
-        try {
-          const debugPrompt = `
-You are an aptitude test assistant helping to review and provide feedback on solutions or reasoning. Analyze these screenshots which might include notes, alternative attempts, or clarifications, and provide detailed feedback.
-I'm solving this aptitude problem: "${problemInfo.problem_statement}" in ${language}. I need help reviewing my approach or clarifying my reasoning.
-YOUR RESPONSE MUST FOLLOW THIS EXACT STRUCTURE WITH THESE SECTION HEADERS:
-### Issues Identified
-- List each issue as a bullet point with clear explanation
-### Specific Improvements and Corrections
-- List specific changes needed to the reasoning or approach as bullet points
-### Optimizations
-- List any better approaches or shortcuts if applicable
-### Explanation of Changes Needed
-Here provide a clear explanation of why the changes are needed
-### Key Points
-- Summary bullet points of the most important takeaways
-If you include examples, use proper markdown code blocks if necessary.
-`;
-          const geminiMessages = [
-            {
-              role: "user",
-              parts: [
-                { text: debugPrompt },
-                ...imageDataList.map(data => ({
-                  inlineData: {
-                    mimeType: "image/png",
-                     data
-                  }
-                }))
-              ]
-            }
-          ];
-          if (mainWindow) {
-            mainWindow.webContents.send("processing-status", {
-              message: "Analyzing work and generating feedback with Gemini...",
-              progress: 60
-            });
-          }
-          const response = await axios.default.post(
-            `https://generativelanguage.googleapis.com/v1beta/models/${config.debuggingModel || "gemini-2.0-flash"}:generateContent?key=${this.geminiApiKey}`,
-            {
-              contents: geminiMessages,
-              generationConfig: {
-                temperature: 0.2,
-                maxOutputTokens: 4000
-              }
-            },
-            { signal }
-          );
-          const responseData = response.data as GeminiResponse;
-          if (!responseData.candidates || responseData.candidates.length === 0) {
-            throw new Error("Empty response from Gemini API");
-          }
-          debugContent = responseData.candidates[0].content.parts[0].text;
-        } catch (error) {
-          console.error("Error using Gemini API for debugging:", error);
-          return {
-            success: false,
-            error: "Failed to process aptitude review request with Gemini API. Please check your API key or try again later."
-          };
-        }
-      } else if (config.apiProvider === "anthropic") {
-        if (!this.anthropicClient) {
-          return {
-            success: false,
-            error: "Anthropic API key not configured. Please check your settings."
-          };
-        }
-        try {
-          const debugPrompt = `
-You are an aptitude test assistant helping to review and provide feedback on solutions or reasoning. Analyze these screenshots which might include notes, alternative attempts, or clarifications, and provide detailed feedback.
-I'm solving this aptitude problem: "${problemInfo.problem_statement}" in ${language}. I need help reviewing my approach or clarifying my reasoning.
-YOUR RESPONSE MUST FOLLOW THIS EXACT STRUCTURE WITH THESE SECTION HEADERS:
-### Issues Identified
-- List each issue as a bullet point with clear explanation
-### Specific Improvements and Corrections
-- List specific changes needed to the reasoning or approach as bullet points
-### Optimizations
-- List any better approaches or shortcuts if applicable
-### Explanation of Changes Needed
-Here provide a clear explanation of why the changes are needed
-### Key Points
-- Summary bullet points of the most important takeaways
-If you include examples, use proper markdown code blocks if necessary.
-`;
-          const messages = [
-            {
-              role: "user" as const,
-              content: [
-                {
-                  type: "text" as const,
-                  text: debugPrompt
-                },
-                ...imageDataList.map(data => ({
-                  type: "image" as const,
-                  source: {
-                    type: "base64" as const,
-                    media_type: "image/png" as const,
-                     data
-                  }
-                }))
-              ]
-            }
-          ];
-          if (mainWindow) {
-            mainWindow.webContents.send("processing-status", {
-              message: "Analyzing work and generating feedback with Claude...",
-              progress: 60
-            });
-          }
-          const response = await this.anthropicClient.messages.create({
-            model: config.debuggingModel || "claude-3-7-sonnet-20250219",
-            max_tokens: 4000,
-            messages: messages,
-            temperature: 0.2
-          });
-          debugContent = (response.content[0] as { type: 'text', text: string }).text;
-        } catch (error: any) {
-          console.error("Error using Anthropic API for debugging:", error);
-          // Add specific handling for Claude's limitations
-          if (error.status === 429) {
-            return {
-              success: false,
-              error: "Claude API rate limit exceeded. Please wait a few minutes before trying again."
-            };
-          } else if (error.status === 413 || (error.message && error.message.includes("token"))) {
-            return {
-              success: false,
-              error: "Your screenshots contain too much information for Claude to process. Switch to OpenAI or Gemini in settings which can handle larger inputs."
-            };
-          }
-          return {
-            success: false,
-            error: "Failed to process aptitude review request with Anthropic API. Please check your API key or try again later."
-          };
-        }
-      }
-      if (mainWindow) {
-        mainWindow.webContents.send("processing-status", {
-          message: "Aptitude review analysis complete",
-          progress: 100
-        });
-      }
-      // --- Parsing logic adapted for aptitude review content ---
-      // Extract any code block from the response (might be formulas, notes, etc.)
-      let extractedCode = "// Aptitude review - see analysis below";
-      const codeMatch = debugContent.match(/```(?:[a-zA-Z]+)?([\s\S]*?)```/);
-      if (codeMatch && codeMatch[1]) {
-        extractedCode = codeMatch[1].trim();
-      }
-
-      // Format headers if they are missing markdown style
-      let formattedDebugContent = debugContent;
-      // Check if the main headers are already in markdown format (###)
-      if (!debugContent.includes('### ')) {
-          // If not, add markdown headers
-          formattedDebugContent = debugContent
-            .replace(/(?:^|
-)[ ]*issues identified[ ]*(?:
-|$)/i, '## Issues Identified')
-            .replace(/(?:^|
-)[ ]*specific improvements and corrections[ ]*(?:
-|$)/i, '## Specific Improvements and Corrections')
-            .replace(/(?:^|
-)[ ]*optimizations[ ]*(?:
-|$)/i, '## Optimizations')
-            .replace(/(?:^|
-)[ ]*explanation of changes needed[ ]*(?:
-|$)/i, '## Explanation of Changes Needed')
-            .replace(/(?:^|
-)[ ]*key points[ ]*(?:
-|$)/i, '## Key Points');
-      }
-
-      // Extract bullet points from the formatted content for the 'thoughts' field
-      const bulletPoints = formattedDebugContent.match(/(?:^|
-)[ ]*(?:[-*•]|\d+\.)[ ]+([^
-]+)/g);
-      const thoughts = bulletPoints
-        ? bulletPoints.map(point => point.replace(/^[ ]*(?:[-*•]|\d+\.)[ ]+/, '').trim()).slice(0, 5) // Limit to 5 points
-        : ["Aptitude review analysis based on your screenshots"];
-
-      // Construct the response object maintaining the expected UI structure
-      const response = {
-        code: extractedCode, // Could be notes, formulas, or relevant text
-        debug_analysis: formattedDebugContent, // The full formatted feedback
-        thoughts: thoughts, // Key bullet points from the analysis
-        time_complexity: "N/A - Aptitude Review Mode", // Placeholder
-        space_complexity: "N/A - Aptitude Review Mode" // Placeholder
-      };
-
-      return { success: true,  response };
-    } catch (error: any) {
-      console.error("Aptitude review processing error:", error);
-      return { success: false, error: error.message || "Failed to process aptitude review request" };
-    }
-  }
-
-  public cancelOngoingRequests(): void {
-    let wasCancelled = false
-    if (this.currentProcessingAbortController) {
-      this.currentProcessingAbortController.abort()
-      this.currentProcessingAbortController = null
-      wasCancelled = true
-    }
-    if (this.currentExtraProcessingAbortController) {
-      this.currentExtraProcessingAbortController.abort()
-      this.currentExtraProcessingAbortController = null
-      wasCancelled = true
-    }
-    this.deps.setHasDebugged(false)
-    this.deps.setProblemInfo(null)
-    const mainWindow = this.deps.getMainWindow()
-    if (wasCancelled && mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send(this.deps.PROCESSING_EVENTS.NO_SCREENSHOTS)
-    }
-  }
+                    <ComplexitySection
+                      timeComplexity={timeComplexityData}
+                      spaceComplexity={spaceComplexityData}
+                      isLoading={!timeComplexityData || !spaceComplexityData}
+                    />
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      )}
+    </>
+  )
 }
+
+export default Solutions
