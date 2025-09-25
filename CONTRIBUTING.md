@@ -1,6 +1,6 @@
-# Contributing to Interview Coder - Unlocked Edition
+# Contributing to Mcafee - Unlocked Edition
 
-Thank you for your interest in contributing to Interview Coder - Unlocked Edition! This free, open-source tool exists to empower the coding community with accessible interview preparation resources, and your efforts can make it even better. We're thrilled to have you join us in this collaborative journey!
+Thank you for your interest in contributing to Mcafee - Unlocked Edition! This free, open-source tool exists to empower the coding community with accessible interview preparation resources, and your efforts can make it even better. We're thrilled to have you join us in this collaborative journey!
 
 ## Our Community Values
 
@@ -110,4 +110,4 @@ As the primary maintainer, I (Ornithopter-pilot) oversee merges and ensure stabi
 
 ## Thank You!
 
-Your contributions make Interview Coder - Unlocked Edition a powerful, community-owned tool. Whether it's adding language support, enhancing UI, or fixing bugs, every effort counts. Let's build something amazing together!
+Your contributions make Mcafee - Unlocked Edition a powerful, community-owned tool. Whether it's adding language support, enhancing UI, or fixing bugs, every effort counts. Let's build something amazing together!

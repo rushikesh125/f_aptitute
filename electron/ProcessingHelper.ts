@@ -735,31 +735,15 @@ export class ProcessingHelper {
 
       // Create prompt for solution generation
       const promptText = `
-Generate a detailed solution for the following coding problem:
+Generate a detailed solution for the following aptitute problem:
 
 PROBLEM STATEMENT:
 ${problemInfo.problem_statement}
 
-CONSTRAINTS:
-${problemInfo.constraints || "No specific constraints provided."}
-
-EXAMPLE INPUT:
-${problemInfo.example_input || "No example input provided."}
-
-EXAMPLE OUTPUT:
-${problemInfo.example_output || "No example output provided."}
-
-LANGUAGE: ${language}
-
-I need the response in the following format:
-1. Code: A clean, optimized implementation in ${language}
-2. Your Thoughts: A list of key insights and reasoning behind your approach
-3. Time complexity: O(X) with a detailed explanation (at least 2 sentences)
-4. Space complexity: O(X) with a detailed explanation (at least 2 sentences)
-
-For complexity explanations, please be thorough. For example: "Time complexity: O(n) because we iterate through the array only once. This is optimal as we need to examine each element at least once to find the solution." or "Space complexity: O(n) because in the worst case, we store all elements in the hashmap. The additional space scales linearly with the input size."
-
-Your solution should be efficient, well-commented, and handle edge cases.
+Generate   proper ans for given aptitute problem ,
+if question include multiple choice question 
+1] Option No. : Ans 
+2] its explanation in short 
 `;
 
       let responseContent;
@@ -801,7 +785,7 @@ Your solution should be efficient, well-commented, and handle edge cases.
               role: "user",
               parts: [
                 {
-                  text: `You are an expert coding interview assistant. Provide a clear, optimal solution with detailed explanations for this problem:\n\n${promptText}`
+                  text: `You are an Integellient Ai Assistand that help in solve Aptitute problems ( that are asked in Aptitute round of JOB ) with proper ans: \n\n${promptText}`
                 }
               ]
             }
