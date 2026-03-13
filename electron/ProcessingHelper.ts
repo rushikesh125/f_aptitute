@@ -330,6 +330,216 @@ export class ProcessingHelper {
     }
   }
 
+  // ─── SYSTEM PROMPTS ───────────────────────────────────────────────────────────
+
+  /**
+   * System/instruction prompt for the EXTRACTION step.
+   * AI must classify the problem type AND return structured JSON.
+   */
+  private getExtractionPrompt(language: string): string {
+    return `You are an expert problem analyzer for both aptitude tests and coding/DSA interviews.
+
+Analyze the screenshot(s) and extract ALL relevant information. Then classify the problem type.
+
+IMPORTANT: If the screenshot contains MULTIPLE aptitude questions, extract ALL of them.
+
+Return ONLY a JSON object — no extra text, no markdown fences — with these exact fields:
+{
+  "problem_type": "aptitude" | "coding",
+  "problem_statement": "<if single question: full problem text. If MULTIPLE questions: list all questions numbered as Q1: ... Q2: ... Q3: ... including all options>",
+  "constraints": "<constraints or empty string>",
+  "example_input": "<example input or empty string>",
+  "example_output": "<expected output or empty string>"
+}
+
+Classification rules:
+- "aptitude": math puzzles, logical reasoning, verbal ability, data interpretation, series, analogies, percentage, profit/loss, speed-distance-time, clock/calendar, seating arrangement, blood relations, etc.
+- "coding": DSA problems, algorithm challenges, data structure questions, implement a function/class, time/space complexity questions, any question that requires writing code.
+
+Preferred coding language if needed: ${language}.`;
+  }
+
+  /**
+   * Solution prompt for APTITUDE problems.
+   * Returns a short direct answer — no code block needed.
+   */
+  private getAptitudeSolutionPrompt(problemStatement: string): string {
+    return `You are an expert aptitude solver. Solve the following aptitude/reasoning problem.
+
+Problem:
+${problemStatement}
+
+Respond in this EXACT format (no deviations):
+
+Answer: <direct answer value or option letter + value>
+Reason: <one concise sentence explaining the key logic or formula used>
+Formula/Trick: <short formula or trick used, if applicable; otherwise omit this line>
+
+Keep it short and direct. No lengthy explanations.`;
+  }
+
+  /**
+   * Solution prompt for CODING / DSA problems.
+   * Returns working code + brief explanation.
+   */
+  private getCodingSolutionPrompt(problemStatement: string, constraints: string, exampleInput: string, exampleOutput: string, language: string): string {
+    return `You are an expert aptitude solver.
+
+Problem(s):
+${problemStatement}
+
+If there are MULTIPLE questions (Q1, Q2, etc.), solve ALL of them.
+
+Respond in this EXACT format:
+
+Q1:
+Answer: <direct answer>
+Reason: <one concise sentence>
+Formula/Trick: <short formula if applicable>
+
+Q2:
+Answer: <direct answer>
+Reason: <one concise sentence>
+Formula/Trick: <short formula if applicable>
+
+(repeat for each question)
+
+If there is only ONE question, skip the Q1 label and just respond:
+Answer: <direct answer>
+Reason: <one concise sentence>
+Formula/Trick: <short formula if applicable>
+
+Keep it short and direct. No lengthy explanations.`;
+  }
+
+  /**
+   * Debug prompt for APTITUDE problems.
+   */
+  private getAptitudeDebugPrompt(problemStatement: string): string {
+    return `You are an expert aptitude coach reviewing a student's attempt.
+
+Original Problem:
+${problemStatement}
+
+Analyze the screenshot(s) showing the student's attempt and provide feedback in this EXACT format:
+
+### Issues Found
+- <bullet: what went wrong in the attempt>
+
+### Correct Answer
+Answer: <correct direct answer>
+Reason: <one concise sentence>
+
+### Key Tip
+- <one-line formula or trick to remember for this type of problem>`;
+  }
+
+  /**
+   * Debug prompt for CODING / DSA problems.
+   */
+  private getCodingDebugPrompt(problemStatement: string, language: string): string {
+    return `You are an expert coding interview coach reviewing a candidate's solution attempt.
+
+Original Problem:
+${problemStatement}
+
+Analyze the screenshot(s) showing the candidate's code, errors, or test case failures.
+
+Respond in this EXACT format:
+
+### Issues Identified
+- <bullet: specific bug or logical error found>
+
+### Specific Improvements and Corrections
+- <bullet: exact change needed with brief reason>
+
+### Optimizations
+- <bullet: performance improvement if any; skip section if not applicable>
+
+### Explanation of Changes Needed
+<2-3 sentences explaining why the fixes are necessary>
+
+### Key Points
+- <bullet: most important takeaway>
+
+If showing corrected code, use a proper \`\`\`${language} code block.`;
+  }
+
+  // ─── RESPONSE FORMATTER ───────────────────────────────────────────────────────
+
+  /**
+   * Formats the raw AI response text into the shape the UI expects:
+   * { code, thoughts, time_complexity, space_complexity }
+   *
+   * For aptitude: code field holds the "Answer + Reason" text (no actual code block).
+   * For coding:   code field holds the extracted code block.
+   */
+  private formatSolutionResponse(responseText: string, problemType: "aptitude" | "coding"): {
+    code: string;
+    thoughts: string[];
+    time_complexity: string;
+    space_complexity: string;
+  } {
+    if (problemType === "aptitude") {
+      // Extract Answer line
+      const answerMatch = responseText.match(/Answer:\s*(.+)/i);
+      const reasonMatch = responseText.match(/Reason:\s*(.+)/i);
+      const formulaMatch = responseText.match(/Formula\/Trick:\s*(.+)/i);
+
+      const answerLine = answerMatch ? `Answer: ${answerMatch[1].trim()}` : responseText.split('\n')[0];
+      const reasonLine = reasonMatch ? reasonMatch[1].trim() : "";
+      const formulaLine = formulaMatch ? `Trick: ${formulaMatch[1].trim()}` : "";
+
+      // "code" field shows the answer prominently
+      const codeField = answerMatch 
+  ? responseText.trim()  // show full response as-is for multi-answer support
+  : responseText.split('\n')[0];
+
+      const thoughts: string[] = [];
+      if (reasonLine) thoughts.push(reasonLine);
+      if (formulaLine) thoughts.push(formulaLine);
+      if (thoughts.length === 0) thoughts.push("Direct answer provided.");
+
+      return {
+        code: codeField,
+        thoughts,
+        time_complexity: "N/A",
+        space_complexity: "N/A"
+      };
+    } else {
+      // coding / DSA
+      const codeMatch = responseText.match(/```(?:[a-zA-Z]*)?\s*([\s\S]*?)```/);
+      const code = codeMatch ? codeMatch[1].trim() : responseText;
+
+      const approachMatch = responseText.match(/Approach:\s*(.+)/i);
+      const timeMatch = responseText.match(/Time Complexity:\s*(.+)/i);
+      const spaceMatch = responseText.match(/Space Complexity:\s*(.+)/i);
+      const insightMatch = responseText.match(/Key Insight:\s*(.+)/i);
+
+      const thoughts: string[] = [];
+      if (approachMatch) thoughts.push(`Approach: ${approachMatch[1].trim()}`);
+      if (insightMatch) thoughts.push(`Key Insight: ${insightMatch[1].trim()}`);
+      if (thoughts.length === 0) {
+        // fallback: grab first few non-empty, non-code lines
+        const lines = responseText
+          .split('\n')
+          .filter(l => l.trim() && !l.includes('```') && !l.startsWith('Time') && !l.startsWith('Space'))
+          .slice(0, 3)
+          .map(l => l.trim());
+        thoughts.push(...lines);
+      }
+
+      return {
+        code,
+        thoughts: thoughts.length > 0 ? thoughts : ["Solution generated."],
+        time_complexity: timeMatch ? timeMatch[1].trim() : "N/A",
+        space_complexity: spaceMatch ? spaceMatch[1].trim() : "N/A"
+      };
+    }
+  }
+
+  // ─── MAIN PROCESSING ──────────────────────────────────────────────────────────
+
   private async processScreenshotsHelper(
     screenshots: Array<{ path: string; data: string }>,
     signal: AbortSignal
@@ -343,13 +553,22 @@ export class ProcessingHelper {
 
       if (mainWindow) {
         mainWindow.webContents.send("processing-status", {
-          message: "Analyzing aptitude problem from screenshots...",
+          message: "Analyzing problem from screenshots...",
           progress: 20
         });
       }
 
-      let problemInfo;
+      let problemInfo: {
+        problem_type: "aptitude" | "coding";
+        problem_statement: string;
+        constraints: string;
+        example_input: string;
+        example_output: string;
+      };
 
+      const extractionPrompt = this.getExtractionPrompt(language);
+
+      // ── EXTRACTION ──────────────────────────────────────────────────────────
       if (config.apiProvider === "openai") {
         if (!this.openaiClient) {
           this.initializeAIClient();
@@ -361,14 +580,14 @@ export class ProcessingHelper {
         const messages = [
           {
             role: "system" as const,
-            content: "You are a coding challenge interpreter. Analyze the screenshot of the coding problem and extract all relevant information. Return the information in JSON format with these fields: problem_statement, constraints, example_input, example_output. Just return the structured JSON without any other text."
+            content: extractionPrompt
           },
           {
             role: "user" as const,
             content: [
               {
                 type: "text" as const,
-                text: `Extract the coding problem details from these screenshots. Return in JSON format. Preferred coding language we gonna use for this problem is ${language}.`
+                text: "Extract and classify the problem from these screenshot(s). Return only JSON."
               },
               ...imageDataList.map(data => ({
                 type: "image_url" as const,
@@ -380,7 +599,7 @@ export class ProcessingHelper {
 
         const extractionResponse = await this.openaiClient.chat.completions.create({
           model: config.extractionModel || "gpt-4o",
-          messages: messages,
+          messages,
           max_tokens: 4000,
           temperature: 0.2
         });
@@ -390,7 +609,6 @@ export class ProcessingHelper {
         problemInfo = JSON.parse(jsonText);
 
       } else if (config.apiProvider === "gemini") {
-        // GEMINI: PROBLEM EXTRACTION — JSON ONLY
         if (!this.geminiApiKey) {
           return { success: false, error: "Gemini API key not configured. Please check your settings." };
         }
@@ -399,11 +617,9 @@ export class ProcessingHelper {
             {
               role: "user",
               parts: [
-                {
-                  text: `You are an AI for job aptitude tests. Extract the problem from screenshot(s). Return ONLY JSON: { problem_statement, constraints, example_input, example_output }. If multiple choice, include options in problem_statement. No extra text. Answer must be direct and short.`
-                },
+                { text: extractionPrompt + "\n\nExtract and classify the problem from these screenshot(s). Return only JSON." },
                 ...imageDataList.map(data => ({
-                  inlineData: { mimeType: "image/png", data: data }
+                  inlineData: { mimeType: "image/png", data }
                 }))
               ]
             }
@@ -413,10 +629,7 @@ export class ProcessingHelper {
             `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${this.geminiApiKey}`,
             {
               contents: geminiMessages,
-              generationConfig: {
-                temperature: 0.2,
-                maxOutputTokens: 4000
-              }
+              generationConfig: { temperature: 0.2, maxOutputTokens: 4000 }
             },
             { signal }
           );
@@ -444,11 +657,11 @@ export class ProcessingHelper {
               content: [
                 {
                   type: "text" as const,
-                  text: `Extract the coding problem details from these screenshots. Return in JSON format with these fields: problem_statement, constraints, example_input, example_output. Preferred coding language is ${language}.`
+                  text: extractionPrompt + "\n\nExtract and classify the problem from these screenshot(s). Return only JSON."
                 },
                 ...imageDataList.map(data => ({
                   type: "image" as const,
-                  source: { type: "base64" as const, media_type: "image/png" as const, data: data }
+                  source: { type: "base64" as const, media_type: "image/png" as const, data }
                 }))
               ]
             }
@@ -457,7 +670,7 @@ export class ProcessingHelper {
           const response = await this.anthropicClient.messages.create({
             model: config.extractionModel || "claude-3-7-sonnet-20250219",
             max_tokens: 4000,
-            messages: messages,
+            messages,
             temperature: 0.2
           });
 
@@ -475,9 +688,16 @@ export class ProcessingHelper {
         }
       }
 
+      // Ensure problem_type defaults to aptitude if missing
+      if (!problemInfo.problem_type) {
+        problemInfo.problem_type = "aptitude";
+      }
+
+      console.log(`Detected problem type: ${problemInfo.problem_type}`);
+
       if (mainWindow) {
         mainWindow.webContents.send("processing-status", {
-          message: "Problem analyzed. Generating direct answer...",
+          message: `${problemInfo.problem_type === "coding" ? "DSA/Coding" : "Aptitude"} problem detected. Generating solution...`,
           progress: 40
         });
       }
@@ -492,26 +712,25 @@ export class ProcessingHelper {
       if (solutionsResult.success) {
         this.screenshotHelper.clearExtraScreenshotQueue();
         mainWindow.webContents.send("processing-status", {
-          message: "Answer generated",
+          message: "Solution ready",
           progress: 100
         });
         mainWindow.webContents.send(this.deps.PROCESSING_EVENTS.SOLUTION_SUCCESS, solutionsResult.data);
         return { success: true, data: solutionsResult.data };
       } else {
-        throw new Error(solutionsResult.error || "Failed to generate solutions");
+        throw new Error(solutionsResult.error || "Failed to generate solution");
       }
 
-      return { success: false, error: "Failed to process screenshots" };
     } catch (error: any) {
       if (axios.isCancel(error)) {
         return { success: false, error: "Processing was canceled by the user." };
       }
       if (error?.response?.status === 401) {
-        return { success: false, error: "Invalid OpenAI API key. Please check your settings." };
+        return { success: false, error: "Invalid API key. Please check your settings." };
       } else if (error?.response?.status === 429) {
-        return { success: false, error: "OpenAI API rate limit exceeded or insufficient credits. Please try again later." };
+        return { success: false, error: "API rate limit exceeded or insufficient credits. Please try again later." };
       } else if (error?.response?.status === 500) {
-        return { success: false, error: "OpenAI server error. Please try again later." };
+        return { success: false, error: "API server error. Please try again later." };
       }
       console.error("API Error Details:", error);
       return { success: false, error: error.message || "Failed to process screenshots. Please try again." };
@@ -520,7 +739,13 @@ export class ProcessingHelper {
 
   private async generateSolutionsHelper(signal: AbortSignal) {
     try {
-      const problemInfo = this.deps.getProblemInfo();
+      const problemInfo = this.deps.getProblemInfo() as {
+        problem_type: "aptitude" | "coding";
+        problem_statement: string;
+        constraints: string;
+        example_input: string;
+        example_output: string;
+      };
       const config = configHelper.loadConfig();
       const mainWindow = this.deps.getMainWindow();
 
@@ -530,15 +755,28 @@ export class ProcessingHelper {
 
       if (mainWindow) {
         mainWindow.webContents.send("processing-status", {
-          message: "Generating direct answer...",
+          message: "Generating solution...",
           progress: 60
         });
       }
 
-      const promptText = `Problem: ${problemInfo.problem_statement}\nAnswer directly and shortly.`;
+      const language = await this.getLanguage();
+      const problemType = problemInfo.problem_type || "aptitude";
 
-      let responseContent;
+      // Pick the right prompt based on detected problem type
+      const promptText = problemType === "coding"
+        ? this.getCodingSolutionPrompt(
+            problemInfo.problem_statement,
+            problemInfo.constraints,
+            problemInfo.example_input,
+            problemInfo.example_output,
+            language
+          )
+        : this.getAptitudeSolutionPrompt(problemInfo.problem_statement);
 
+      let responseContent: string;
+
+      // ── SOLUTION GENERATION ─────────────────────────────────────────────────
       if (config.apiProvider === "openai") {
         if (!this.openaiClient) {
           return { success: false, error: "OpenAI API key not configured. Please check your settings." };
@@ -547,7 +785,12 @@ export class ProcessingHelper {
         const solutionResponse = await this.openaiClient.chat.completions.create({
           model: config.solutionModel || "gpt-4o",
           messages: [
-            { role: "system", content: "You are an expert coding interview assistant. Provide clear, optimal solutions with detailed explanations." },
+            {
+              role: "system",
+              content: problemType === "coding"
+                ? "You are an expert DSA/coding interview assistant. Always provide complete working code first, then a brief explanation."
+                : "You are an expert aptitude solver. Always give a direct answer first, then a one-line explanation."
+            },
             { role: "user", content: promptText }
           ],
           max_tokens: 4000,
@@ -556,7 +799,6 @@ export class ProcessingHelper {
         responseContent = solutionResponse.choices[0].message.content;
 
       } else if (config.apiProvider === "gemini") {
-        // GEMINI: DIRECT ANSWER — NO OPTION LETTER
         if (!this.geminiApiKey) {
           return { success: false, error: "Gemini API key not configured. Please check your settings." };
         }
@@ -564,19 +806,7 @@ export class ProcessingHelper {
           const geminiMessages = [
             {
               role: "user",
-              parts: [
-                {
-                  text: `You are an AI for job aptitude tests. Solve this aptitude question **directly and shortly**. Return **only the answer value** (no option letter).
-
-Problem: ${promptText}
-
-Answer format:
-1] Answer: 150
-2] Short reason in 1 line.
-
-No long explanation. Be concise.`
-                }
-              ]
+              parts: [{ text: promptText }]
             }
           ];
 
@@ -584,10 +814,7 @@ No long explanation. Be concise.`
             `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${this.geminiApiKey}`,
             {
               contents: geminiMessages,
-              generationConfig: {
-                temperature: 0.2,
-                maxOutputTokens: 4000
-              }
+              generationConfig: { temperature: 0.2, maxOutputTokens: 4000 }
             },
             { signal }
           );
@@ -607,22 +834,15 @@ No long explanation. Be concise.`
           return { success: false, error: "Anthropic API key not configured. Please check your settings." };
         }
         try {
-          const messages = [
-            {
-              role: "user" as const,
-              content: [
-                {
-                  type: "text" as const,
-                  text: `You are an expert coding interview assistant. Provide a clear, optimal solution with detailed explanations for this problem:\n\n${promptText}`
-                }
-              ]
-            }
-          ];
-
           const response = await this.anthropicClient.messages.create({
             model: config.solutionModel || "claude-3-7-sonnet-20250219",
             max_tokens: 4000,
-            messages: messages,
+            messages: [
+              {
+                role: "user" as const,
+                content: [{ type: "text" as const, text: promptText }]
+              }
+            ],
             temperature: 0.2
           });
           responseContent = (response.content[0] as { type: 'text', text: string }).text;
@@ -637,32 +857,17 @@ No long explanation. Be concise.`
         }
       }
 
-      // Extract answer in short format
-      const codeMatch = responseContent.match(/```(?:\w+)?\s*([\s\S]*?)```/);
-      const code = codeMatch ? codeMatch[1].trim() : responseContent;
-
-      const thoughts = responseContent
-        .split('\n')
-        .filter(line => line.trim() && !line.includes('```'))
-        .slice(0, 3)
-        .map(line => line.trim());
-
-      const formattedResponse = {
-        code: code || "No code required for aptitude question.",
-        thoughts: thoughts.length > 0 ? thoughts : ["Direct answer provided."],
-        time_complexity: "N/A",
-        space_complexity: "N/A"
-      };
-
+      const formattedResponse = this.formatSolutionResponse(responseContent, problemType);
       return { success: true, data: formattedResponse };
+
     } catch (error: any) {
       if (axios.isCancel(error)) {
         return { success: false, error: "Processing was canceled by the user." };
       }
       if (error?.response?.status === 401) {
-        return { success: false, error: "Invalid OpenAI API key. Please check your settings." };
+        return { success: false, error: "Invalid API key. Please check your settings." };
       } else if (error?.response?.status === 429) {
-        return { success: false, error: "OpenAI API rate limit exceeded or insufficient credits. Please try again later." };
+        return { success: false, error: "API rate limit exceeded or insufficient credits. Please try again later." };
       }
       console.error("Solution generation error:", error);
       return { success: false, error: error.message || "Failed to generate solution" };
@@ -674,7 +879,13 @@ No long explanation. Be concise.`
     signal: AbortSignal
   ) {
     try {
-      const problemInfo = this.deps.getProblemInfo();
+      const problemInfo = this.deps.getProblemInfo() as {
+        problem_type: "aptitude" | "coding";
+        problem_statement: string;
+        constraints: string;
+        example_input: string;
+        example_output: string;
+      };
       const config = configHelper.loadConfig();
       const mainWindow = this.deps.getMainWindow();
 
@@ -683,6 +894,8 @@ No long explanation. Be concise.`
       }
 
       const imageDataList = screenshots.map(screenshot => screenshot.data);
+      const language = await this.getLanguage();
+      const problemType = problemInfo.problem_type || "aptitude";
 
       if (mainWindow) {
         mainWindow.webContents.send("processing-status", {
@@ -691,23 +904,29 @@ No long explanation. Be concise.`
         });
       }
 
-      let debugContent;
+      const debugPromptText = problemType === "coding"
+        ? this.getCodingDebugPrompt(problemInfo.problem_statement, language)
+        : this.getAptitudeDebugPrompt(problemInfo.problem_statement);
 
+      let debugContent: string;
+
+      // ── DEBUG GENERATION ────────────────────────────────────────────────────
       if (config.apiProvider === "openai") {
         if (!this.openaiClient) {
           return { success: false, error: "OpenAI API key not configured. Please check your settings." };
         }
+
         const messages = [
           {
             role: "system" as const,
-            content: `You are a coding interview assistant helping debug and improve solutions. Analyze these screenshots which include either error messages, incorrect outputs, or test cases, and provide detailed debugging help. Your response MUST follow this exact structure with these section headers (use ### for headers): ### Issues Identified - List each issue as a bullet point with clear explanation ### Specific Improvements and Corrections - List specific code changes needed as bullet points ### Optimizations - List any performance optimizations if applicable ### Explanation of Changes Needed Here provide a clear explanation of why the changes are needed ### Key Points - Summary bullet points of the most important takeaways If you include code examples, use proper markdown code blocks with language specification (e.g. \`\`\`java).`
+            content: debugPromptText
           },
           {
             role: "user" as const,
             content: [
               {
                 type: "text" as const,
-                text: `I'm solving this coding problem: "${problemInfo.problem_statement}" in ${await this.getLanguage()}. I need help with debugging or improving my solution. Here are screenshots of my code, the errors or test cases. Please provide a detailed analysis with: 1. What issues you found in my code 2. Specific improvements and corrections 3. Any optimizations that would make the solution better 4. A clear explanation of the changes needed`
+                text: "Analyze my attempt from the screenshot(s) and provide structured feedback."
               },
               ...imageDataList.map(data => ({
                 type: "image_url" as const,
@@ -719,14 +938,14 @@ No long explanation. Be concise.`
 
         if (mainWindow) {
           mainWindow.webContents.send("processing-status", {
-            message: "Analyzing code and generating debug feedback...",
+            message: "Generating debug feedback...",
             progress: 60
           });
         }
 
         const debugResponse = await this.openaiClient.chat.completions.create({
           model: config.debuggingModel || "gpt-4o",
-          messages: messages,
+          messages,
           max_tokens: 4000,
           temperature: 0.2
         });
@@ -737,27 +956,13 @@ No long explanation. Be concise.`
           return { success: false, error: "Gemini API key not configured. Please check your settings." };
         }
         try {
-          const debugPrompt = `You are an AI for job aptitude tests. Analyze the user's attempt (screenshots may show wrong answer, explanation, or test case). Give feedback in this format:
-
-### Issues Identified
-- Short bullet points
-
-### Correct Answer
-1] Answer: 150
-2] Short reason in 1 line.
-
-### Key Tip
-- One-line trick or formula
-
-No long explanation. Be direct.`;
-
-          const geminiMessages = [
+          const geminiMessages: GeminiMessage[] = [
             {
               role: "user",
               parts: [
-                { text: debugPrompt },
+                { text: debugPromptText + "\n\nAnalyze my attempt from the screenshot(s)." },
                 ...imageDataList.map(data => ({
-                  inlineData: { mimeType: "image/png", data: data }
+                  inlineData: { mimeType: "image/png", data }
                 }))
               ]
             }
@@ -774,10 +979,7 @@ No long explanation. Be direct.`;
             `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${this.geminiApiKey}`,
             {
               contents: geminiMessages,
-              generationConfig: {
-                temperature: 0.2,
-                maxOutputTokens: 4000
-              }
+              generationConfig: { temperature: 0.2, maxOutputTokens: 4000 }
             },
             { signal }
           );
@@ -803,11 +1005,11 @@ No long explanation. Be direct.`;
               content: [
                 {
                   type: "text" as const,
-                  text: `You are a coding interview assistant. Analyze these screenshots (code, error, or test case) and provide structured debugging help.`
+                  text: debugPromptText + "\n\nAnalyze my attempt from the screenshot(s) and provide structured feedback."
                 },
                 ...imageDataList.map(data => ({
                   type: "image" as const,
-                  source: { type: "base64" as const, media_type: "image/png" as const, data: data }
+                  source: { type: "base64" as const, media_type: "image/png" as const, data }
                 }))
               ]
             }
@@ -816,7 +1018,7 @@ No long explanation. Be direct.`;
           const response = await this.anthropicClient.messages.create({
             model: config.debuggingModel || "claude-3-7-sonnet-20250219",
             max_tokens: 4000,
-            messages: messages,
+            messages,
             temperature: 0.2
           });
           debugContent = (response.content[0] as { type: 'text', text: string }).text;
@@ -838,21 +1040,33 @@ No long explanation. Be direct.`;
         });
       }
 
+      // ── FORMAT DEBUG RESPONSE (compatible with UI) ─────────────────────────
       let extractedCode = "// See analysis below";
-      const codeMatch = debugContent.match(/```(?:[a-zA-Z]+)?([\s\S]*?)```/);
-      if (codeMatch && codeMatch[1]) {
-        extractedCode = codeMatch[1].trim();
+
+      if (problemType === "coding") {
+        const codeMatch = debugContent.match(/```(?:[a-zA-Z]+)?\s*([\s\S]*?)```/);
+        if (codeMatch && codeMatch[1]) {
+          extractedCode = codeMatch[1].trim();
+        }
+      } else {
+        // For aptitude debug, show the "Correct Answer" block as the "code" field
+        const correctAnswerMatch = debugContent.match(/### Correct Answer\s*([\s\S]*?)(?=###|$)/i);
+        if (correctAnswerMatch) {
+          extractedCode = correctAnswerMatch[1].trim();
+        }
       }
 
       const bulletPoints = debugContent.match(/(?:^|\n)[ ]*(?:[-*•]|\d+\.)[ ]+([^\n]+)/g);
-      const thoughts = bulletPoints ? bulletPoints.map(p => p.replace(/^[ ]*(?:[-*•]|\d+\.)[ ]+/, '').trim()).slice(0, 5) : ["Check analysis."];
+      const thoughts = bulletPoints
+        ? bulletPoints.map(p => p.replace(/^[ ]*(?:[-*•]|\d+\.)[ ]+/, '').trim()).slice(0, 5)
+        : ["Check the analysis above."];
 
       const response = {
         code: extractedCode,
         debug_analysis: debugContent,
-        thoughts: thoughts,
-        time_complexity: "N/A - Debug mode",
-        space_complexity: "N/A - Debug mode"
+        thoughts,
+        time_complexity: problemType === "coding" ? "N/A - Debug mode" : "N/A",
+        space_complexity: problemType === "coding" ? "N/A - Debug mode" : "N/A"
       };
 
       return { success: true, data: response };
