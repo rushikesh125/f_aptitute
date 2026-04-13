@@ -2,9 +2,9 @@
 
 const MODELS = {
   gemini: {
-    default: "gemini-3.1-flash-lite-preview",
+    default: "gemini-2.5-flash-lite",
     available: [
-      "gemini-3.1-flash-lite-preview",
+      "gemini-2.5-flash-lite",
       "gemini-2.0-flash",
       "gemini-1.5-pro",
     ]
@@ -34,7 +34,7 @@ const DEFAULT_MODEL = MODELS[DEFAULT_PROVIDER].default;
 
 /**
  * Get the default model for a given provider.
- * Falls back to gemini-3.1-flash-lite-preview if provider is unknown.
+ * Falls back to gemini-2.5-flash-lite if provider is unknown.
  */
 function getDefaultModel(provider) {
   return MODELS[provider]?.default || DEFAULT_MODEL;
